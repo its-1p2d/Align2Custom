@@ -127,7 +127,7 @@ This addon can be installed in two differents ways.
 ### Installation from Github
 
 This method is recommended for Blender versions prior to 4.2 :
- - Download ZIP file of [Align2Custom V2.1.0](https://github.com/fdaubine/Align2Custom/releases/tag/V2.1.0) from the release section
+ - Download ZIP file of [Align2Custom V2.1.1](https://github.com/fdaubine/Align2Custom/releases/tag/V2.1.1) from the release section
  - Open Blender, then drag and drop the ZIP file onto Blender UI to install the add-on
  - Check that the `Align 2 Custom` option appears in the list of add-ons (`Edit` -> `Preferences...` -> `Add-ons`)
 
@@ -152,6 +152,10 @@ If you prefer hard transitions or if you're facing problems (odd behaviors, perf
 <br>
 
 ## Changelog
+
+### V2.1.1
+
+Removal of useless "Adjust last operation" panel
 
 ### V2.1.0
 
