@@ -83,7 +83,7 @@ class VIEW3D_OT_a2c(bpy.types.Operator):
 
     bl_idname = "view3d.a2c"
     bl_label = "Align to 3D cursor or custom transform orientation"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {'REGISTER'}
 
     ALIGN_MODE_ITEMS = [
         ("CUSTOM", "Align to custom orientation", "", 1),
