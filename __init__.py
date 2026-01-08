@@ -32,11 +32,11 @@ from . import align2custom as a2c
 
 
 bl_info = {
-    "name": "Align view to custom orientation or 3D cursor",
+    "name": "Align 3D View to selection, custom orientation or cursor",
     "description": "Set of commands to align the 3D view to the axes of "
                    "the active custom transform orientation or the 3D cursor.",
-    "author": "Francois Daubine",
-    "version": (2, 1, 2),
+    "author": "Francois Daubine, 1P2D",
+    "version": (2, 2, 0),
     "blender": (4, 2, 0),
     "location": "View3D > View > Align View",
     "warning": "",
