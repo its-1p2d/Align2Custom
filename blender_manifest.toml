@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
 id = "align2custom"
-version = "2.2.0"
+version = "2.5.0"
 name = "Align 2 Custom"
 tagline = "Align 3D View to selection, custom orientation or cursor"
 maintainer = "Francois Daubine <fdaubine.dev@gmail.com>, 1P2D <me@1p2d.com>"
@@ -13,4 +13,5 @@ tags = ["Modeling", "3D View"]
 blender_version_min = "4.2.0"
 license = [
   "SPDX:GPL-3.0-or-later",
+
 ]
