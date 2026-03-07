@@ -20,7 +20,7 @@
 
 # <pep8 compliant>
 
-# Contributed to by fdaubine
+# Contributed to by fdaubine and 1P2D
 
 
 """ 
@@ -30,7 +30,7 @@ Align2Custom package entry point
 
 import bpy
 
-from . import align2custom as a2c
+from . import ops as a2c
 from . import preferences
 from . import ui
 
@@ -74,6 +74,20 @@ def register():
             "view3d.a2c_leave_aligned_view", 'LEFTMOUSE', 'DOUBLE_CLICK',
             shift=True, alt=True, ctrl=True
         )
+        _addon_keymaps.append((km, kmi))
+        kmi = km.keymap_items.new(
+            "view3d.a2c_snap_orbit", 'LEFT_ALT', 'PRESS'
+        )
+        _addon_keymaps.append((km, kmi))
+        kmi = km.keymap_items.new(
+            "view3d.view_roll", 'WHEELUPMOUSE', 'PRESS', shift=True, alt=True
+        )
+        kmi.properties.angle = 0.1
+        _addon_keymaps.append((km, kmi))
+        kmi = km.keymap_items.new(
+            "view3d.view_roll", 'WHEELDOWNMOUSE', 'PRESS', shift=True, alt=True
+        )
+        kmi.properties.angle = -0.1
         _addon_keymaps.append((km, kmi))
 
 
