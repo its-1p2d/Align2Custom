@@ -100,10 +100,16 @@ class VIEW3D_OT_a2c_pie_viewpoint(bpy.types.Operator):
 
 
 class VIEW3D_OT_a2c_pie_viewpoint_nearest(bpy.types.Operator):
-    """Align view to the nearest axis of the current orientation (Smart)"""
+    """Align view to the nearest axis of the current orientation (Smart).
+Alt+Click: Reset Auto Perspective and Align to World (last-resort recovery)"""
     bl_idname = "view3d.a2c_pie_viewpoint_nearest"
     bl_label = "Align to Nearest View"
     bl_options = {'REGISTER'}
+
+    def invoke(self, context, event):
+        if event.alt and not align2custom.is_viewport_aligned(context):
+            return bpy.ops.view3d.a2c_reset_state('EXEC_DEFAULT')
+        return self.execute(context)
 
     def execute(self, context):
         mode = context.window_manager.a2c_pie_mode
@@ -187,6 +193,24 @@ class VIEW3D_MT_a2c_confirm_one_edge(bpy.types.Menu):
         row.operator("view3d.a2c_run_selection_align", text="No", icon='X')
 
 
+# ## Exit-pie wrapper (handles ALT+Click → Confirm and Exit) ##################
+
+class VIEW3D_OT_a2c_exit_pie(bpy.types.Operator):
+    """Exit Aligned View, restoring the previous camera angle.
+Alt+Click: Confirm current angle and exit — the view stays here and becomes the new starting point"""
+    bl_idname = "view3d.a2c_exit_pie"
+    bl_label = "Exit"
+    bl_options = {'REGISTER'}
+
+    def invoke(self, context, event):
+        if event.alt:
+            return bpy.ops.view3d.a2c_confirm_and_exit('EXEC_DEFAULT')
+        return self.execute(context)
+
+    def execute(self, context):
+        return bpy.ops.view3d.a2c_leave_aligned_view('EXEC_DEFAULT')
+
+
 # ## Pie menu ##################################################################
 
 class VIEW3D_MT_a2c_pie(bpy.types.Menu):
@@ -234,7 +258,7 @@ class VIEW3D_MT_a2c_pie(bpy.types.Menu):
             op.angle = math.radians(90)
             op.from_canonical = is_drifted
             # 7
-            pie.operator("view3d.a2c_leave_aligned_view", icon='SCREEN_BACK', text="Exit")
+            pie.operator("view3d.a2c_exit_pie", icon='SCREEN_BACK', text="Exit")
             # 8
             op = pie.operator("view3d.a2c_roll_view", icon='DECORATE_OVERRIDE', text="Roll +180°" + suffix)
             op.angle = math.radians(180)
@@ -279,7 +303,7 @@ class VIEW3D_MT_a2c_pie(bpy.types.Menu):
                 sub = row_sw.row()
                 sub.enabled = viewpoint_enabled
                 sub.operator("view3d.a2c_pie_viewpoint", text="X").prop_viewpoint = 'RIGHT'
-                row_sw.operator("view3d.a2c_leave_aligned_view", icon='CANCEL', text="Leave")
+                row_sw.operator("view3d.a2c_exit_pie", icon='SCREEN_BACK', text="Exit")
             else:
                 col = pie.column()
                 col.enabled = viewpoint_enabled
@@ -395,6 +419,7 @@ _classes = (
     VIEW3D_OT_a2c_confirm_switch_to_edge,
     VIEW3D_OT_a2c_run_selection_align,
     VIEW3D_MT_a2c_confirm_one_edge,
+    VIEW3D_OT_a2c_exit_pie,
     VIEW3D_MT_a2c_pie,
     VIEW3D_MT_a2c,
     VIEW3D_MT_align2custom,

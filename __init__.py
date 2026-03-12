@@ -44,7 +44,7 @@ bl_info = {
     "description": "Set of commands to align the 3D view to the axes of "
                    "the active custom transform orientation or the 3D cursor.",
     "author": "Francois Daubine, 1P2D",
-    "version": (2, 5, 0),
+    "version": (2, 5, 1),
     "blender": (4, 2, 0),
     "location": "View3D > View > Align View",
     "warning": "",

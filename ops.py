@@ -33,15 +33,21 @@ import mathutils as mu
 import threading as thd
 import time
 import bpy
+import blf
 import bmesh
 
 
 # ## Global data ##############################################################
 GL_TOKEN_LOCK = thd.Event()  # Set while a smooth rotation is in progress
+_A2C_STOP_EVENT = thd.Event()  # Set during unregister to abort any running rotation thread
 # Storage for original perspective mode and rotation state for each area
 # Also stores pre-alignment view (rotation, location, distance) for "Leave aligned view"
 GL_VIEWPORT_STATE = {}      # Format: {area_ptr: {'original_perspective': str, 'aligned_rotation': quat, 'is_aligned': bool, 'view_rotation_before': quat, 'view_location_before': Vector, 'view_distance_before': float}}
 GL_DRAW_HANDLER = None      # Draw handler for monitoring viewport changes
+_A2C_OVERLAY_HANDLER = None # Draw handler for the persistent aligned-view overlay text
+# Captured once when the first viewport enters aligned view; restored when the last one leaves.
+# Prevents the "last leaver restores wrong value" bug when multiple viewports are aligned.
+_A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY = None
 
 
 # ## Constants ################################################################
@@ -101,6 +107,37 @@ def get_area_pointer(area):
     return None
 
 
+def _capture_auto_perspective_if_first(context):
+    """
+    If no viewport is currently in aligned view, capture the current global
+    auto-perspective preference so it can be restored when the last aligned
+    viewport leaves. Safe to call even when Force Ortho is off.
+    """
+    global _A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY
+    if any(st.get('is_aligned') for st in GL_VIEWPORT_STATE.values()):
+        return
+    try:
+        _A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY = context.preferences.inputs.use_auto_perspective
+    except Exception:
+        pass
+
+
+def _restore_auto_perspective_if_last(context):
+    """
+    If no viewport is still in aligned view, restore the global auto-perspective
+    preference that was captured before any viewport entered aligned view.
+    """
+    global _A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY
+    if any(st.get('is_aligned') for st in GL_VIEWPORT_STATE.values()):
+        return
+    if _A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY is not None:
+        try:
+            context.preferences.inputs.use_auto_perspective = _A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY
+        except Exception:
+            pass
+        _A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY = None
+
+
 def store_viewport_state(area, original_perspective, aligned_rotation,
                         view_rotation_before=None, view_location_before=None, view_distance_before=None,
                         transform_orientation_before=None, object_align_before=None,
@@ -132,11 +169,12 @@ def store_viewport_state(area, original_perspective, aligned_rotation,
         GL_VIEWPORT_STATE[area_ptr] = state
 
 
-def _restore_aligned_state_settings(window, state, include_auto_perspective=True):
+def _restore_aligned_state_settings(window, state):
     """
-    Restore transform orientation, object align, and (optionally) auto-perspective
-    from the stored state dict. Pass include_auto_perspective=False when the caller
-    wants to defer restoring auto-perspective (e.g. until after an animation ends).
+    Restore transform orientation and object align from the stored state dict.
+    Auto-perspective is intentionally NOT restored here; use
+    _restore_auto_perspective_if_last() after marking the viewport as unaligned
+    so the preference is only restored when the last aligned viewport leaves.
     Swallows errors.
     """
     if 'transform_orientation_before' in state:
@@ -149,11 +187,6 @@ def _restore_aligned_state_settings(window, state, include_auto_perspective=True
             bpy.context.preferences.edit.object_align = state['object_align_before']
             if 'a2c_object_align_before' in window.scene:
                 del window.scene['a2c_object_align_before']
-        except Exception:
-            pass
-    if include_auto_perspective and 'use_auto_perspective_before' in state:
-        try:
-            bpy.context.preferences.inputs.use_auto_perspective = state['use_auto_perspective_before']
         except Exception:
             pass
 
@@ -191,6 +224,7 @@ def check_and_restore_perspective():
                                 space.region_3d.view_perspective = state['original_perspective']
                                 state['is_aligned'] = False
                                 _restore_aligned_state_settings(window, state)
+                                _restore_auto_perspective_if_last(bpy.context)
                             else:
                                 # Orbiting / auto-perspective switched view; force ortho back
                                 space.region_3d.view_perspective = 'ORTHO'
@@ -200,6 +234,7 @@ def check_and_restore_perspective():
                             space.region_3d.view_perspective = state['original_perspective']
                             state['is_aligned'] = False
                             _restore_aligned_state_settings(window, state)
+                            _restore_auto_perspective_if_last(bpy.context)
 
     # Prune entries for viewports that no longer exist and are no longer aligned
     stale = [p for p, s in GL_VIEWPORT_STATE.items()
@@ -214,6 +249,37 @@ def viewport_draw_handler():
         check_and_restore_perspective()
     except Exception:
         # Silently handle any errors to avoid disrupting the viewport
+        pass
+
+
+def _overlay_draw_callback():
+    """Draw a persistent 'Aligned View' text label whenever the active viewport is in aligned state."""
+    try:
+        context = bpy.context
+        if not context or not context.area or context.area.type != 'VIEW_3D':
+            return
+        prefs = get_prefs(context)
+        if prefs is None or not getattr(prefs, 'pref_show_overlay', True):
+            return
+        if not is_viewport_aligned(context):
+            return
+        region = context.region
+        if not region:
+            return
+        text = "Aligned View"
+        font_id = 0
+        size = getattr(prefs, 'pref_overlay_text_size', 16)
+        color = tuple(getattr(prefs, 'pref_overlay_text_color', (1.0, 1.0, 1.0, 0.8)))
+        v_pct = getattr(prefs, 'pref_overlay_vertical_position', 90.0)
+        h_pct = getattr(prefs, 'pref_overlay_horizontal_position', 50.0)
+        blf.size(font_id, size)
+        text_w, _ = blf.dimensions(font_id, text)
+        x = int(region.width * h_pct / 100.0) - int(text_w / 2)
+        y = int(region.height * v_pct / 100.0)
+        blf.position(font_id, x, y, 0)
+        blf.color(font_id, *color)
+        blf.draw(font_id, text)
+    except Exception:
         pass
 
 
@@ -421,6 +487,7 @@ def smooth_rotate(space, quat_begin, quat_end, on_complete=None):
     Rotate the 3D view smoothly between 'quat_begin' and 'quat_end' on a
     background thread. Calls on_complete(space) when done, if provided.
     Clears GL_TOKEN_LOCK when finished.
+    Exits early if _A2C_STOP_EVENT is set (e.g. during addon unregister / Blender shutdown).
     """
     if space:
         diff_quat = quat_end.rotation_difference(quat_begin)
@@ -430,7 +497,7 @@ def smooth_rotate(space, quat_begin, quat_end, on_complete=None):
         start_time = time.time()
         current_time = start_time
 
-        while current_time <= start_time + duration:
+        while current_time <= start_time + duration and not _A2C_STOP_EVENT.is_set():
             if duration == 0.0:
                 factor = 1.0
             else:
@@ -439,12 +506,24 @@ def smooth_rotate(space, quat_begin, quat_end, on_complete=None):
             time.sleep(_SMOOTH_ROT_STEP)
             current_time = time.time()
 
-        space.region_3d.view_rotation = quat_end
-        space.region_3d.view_perspective = 'ORTHO'
-        if on_complete:
-            on_complete(space)
+        if not _A2C_STOP_EVENT.is_set():
+            space.region_3d.view_rotation = quat_end
+            space.region_3d.view_perspective = 'ORTHO'
+            if on_complete:
+                on_complete(space)
 
     GL_TOKEN_LOCK.clear()
+
+
+def _start_rotation_thread(target, args=()):
+    """
+    Start a smooth-rotation background thread as a daemon.
+    Daemon threads are abandoned (not waited for) during Python shutdown,
+    preventing the crash that occurs when Blender closes mid-rotation.
+    """
+    t = thd.Thread(target=target, args=args, daemon=True)
+    t.start()
+    return t
 
 
 # ## Preferences section ######################################################
@@ -509,8 +588,7 @@ class VIEW3D_OT_a2c_pivot_view(bpy.types.Operator):
 
         if prefs.pref_smooth:
             GL_TOKEN_LOCK.set()
-            rotation_job = thd.Thread(target=smooth_rotate, args=(space, view_quat, new_quat))
-            rotation_job.start()
+            _start_rotation_thread(smooth_rotate, (space, view_quat, new_quat))
         else:
             rv3d.view_rotation = new_quat
 
@@ -563,8 +641,7 @@ class VIEW3D_OT_a2c_snap_orbit(bpy.types.Operator):
             return {'CANCELLED'}
         if prefs.pref_smooth:
             GL_TOKEN_LOCK.set()
-            rotation_job = thd.Thread(target=smooth_rotate, args=(space, current_quat, target_quat))
-            rotation_job.start()
+            _start_rotation_thread(smooth_rotate, (space, current_quat, target_quat))
         else:
             rv3d.view_rotation = target_quat
         rv3d.view_perspective = 'ORTHO'
@@ -613,6 +690,69 @@ class VIEW3D_OT_a2c_pivot_view_drag(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
 
+class VIEW3D_OT_a2c_confirm_and_exit(bpy.types.Operator):
+    """Exit Aligned View keeping the current camera angle.
+The current view becomes the new starting point for the next alignment — no revert.
+Alt+Click the Exit/Leave button in the pie menu to trigger this"""
+    bl_idname = "view3d.a2c_confirm_and_exit"
+    bl_label = "Confirm and Exit Aligned View"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        if not context.area or context.area.type != 'VIEW_3D':
+            return {'CANCELLED'}
+        area_ptr = get_area_pointer(context.area)
+        if not area_ptr or area_ptr not in GL_VIEWPORT_STATE:
+            return {'CANCELLED'}
+        state = GL_VIEWPORT_STATE[area_ptr]
+        if not state.get('is_aligned'):
+            return {'CANCELLED'}
+        # Restore transform orientation and object align without touching the camera transform
+        _restore_aligned_state_settings(context.window, state)
+        state['is_aligned'] = False
+        _restore_auto_perspective_if_last(context)
+        self.report({'INFO'}, "Aligned View: Confirmed (camera angle kept)")
+        return {'FINISHED'}
+
+
+class VIEW3D_OT_a2c_reset_state(bpy.types.Operator):
+    """Reset Auto Perspective and Align Methods to defaults.
+Use this as a last resort when Auto Perspective or Align to World are no longer working correctly.
+Alt+Click the Smart button in the pie menu (non-aligned mode) to trigger this"""
+    bl_idname = "view3d.a2c_reset_state"
+    bl_label = "Reset Auto Perspective and Align Methods"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        global _A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY
+        try:
+            context.preferences.inputs.use_auto_perspective = True
+        except Exception:
+            pass
+        try:
+            context.preferences.edit.object_align = 'WORLD'
+        except Exception:
+            pass
+        for window in context.window_manager.windows:
+            scene = window.scene
+            # Reset transform orientation if stuck on VIEW (set by the addon on align)
+            try:
+                if scene.transform_orientation_slots[0].type == 'VIEW':
+                    scene.transform_orientation_slots[0].type = 'GLOBAL'
+            except Exception:
+                pass
+            if 'a2c_object_align_before' in scene:
+                try:
+                    del scene['a2c_object_align_before']
+                except Exception:
+                    pass
+        for state in GL_VIEWPORT_STATE.values():
+            state['is_aligned'] = False
+        _A2C_USE_AUTO_PERSPECTIVE_BEFORE_ANY = None
+        self.report({'INFO'}, "Align2Custom: Auto Perspective, Transform Orientation and New Objects Align reset to defaults")
+        return {'FINISHED'}
+
+
 class VIEW3D_OT_a2c_leave_aligned_view(bpy.types.Operator):
     """
     Restore the view to its state from before the last alignment.
@@ -639,7 +779,7 @@ class VIEW3D_OT_a2c_leave_aligned_view(bpy.types.Operator):
         target_quat = state['view_rotation_before'].copy()
 
         # Restore transform orientation and object align immediately (auto-perspective deferred)
-        _restore_aligned_state_settings(context.window, state, include_auto_perspective=False)
+        _restore_aligned_state_settings(context.window, state)
 
         prefs = context.preferences.addons[__package__].preferences
         if prefs.pref_smooth:
@@ -649,29 +789,17 @@ class VIEW3D_OT_a2c_leave_aligned_view(bpy.types.Operator):
                 space.region_3d.view_location = state['view_location_before'].copy()
                 space.region_3d.view_distance = state['view_distance_before']
                 space.region_3d.view_perspective = state['original_perspective']
-                if 'use_auto_perspective_before' in state:
-                    try:
-                        bpy.context.preferences.inputs.use_auto_perspective = state['use_auto_perspective_before']
-                    except Exception:
-                        pass
                 state['is_aligned'] = False
+                _restore_auto_perspective_if_last(bpy.context)
 
-            rotation_job = thd.Thread(
-                target=smooth_rotate,
-                args=(space, current_quat, target_quat, on_leave_complete)
-            )
-            rotation_job.start()
+            _start_rotation_thread(smooth_rotate, (space, current_quat, target_quat, on_leave_complete))
         else:
             rv3d.view_rotation = target_quat
             rv3d.view_location = state['view_location_before'].copy()
             rv3d.view_distance = state['view_distance_before']
             rv3d.view_perspective = state['original_perspective']
-            if 'use_auto_perspective_before' in state:
-                try:
-                    context.preferences.inputs.use_auto_perspective = state['use_auto_perspective_before']
-                except Exception:
-                    pass
             state['is_aligned'] = False
+            _restore_auto_perspective_if_last(context)
         self.report({'INFO'}, "Aligned View: Disabled")
         return {'FINISHED'}
 
@@ -718,11 +846,7 @@ class VIEW3D_OT_a2c_roll_view(bpy.types.Operator):
 
         if prefs.pref_smooth:
             GL_TOKEN_LOCK.set()
-            rotation_job = thd.Thread(
-                target=VIEW3D_OT_a2c.smooth_rotate,
-                args=(space, view_quat, new_quat)
-            )
-            rotation_job.start()
+            _start_rotation_thread(smooth_rotate, (space, view_quat, new_quat))
         else:
             rv3d.view_rotation = new_quat
 
@@ -863,6 +987,10 @@ class VIEW3D_OT_a2c(bpy.types.Operator):
                     pass
             use_auto_perspective_before = None
             if prefs.pref_force_ortho_in_aligned_view:
+                # Must capture before store_viewport_state marks is_aligned=True,
+                # otherwise the "any already aligned?" guard in the capture function
+                # fires prematurely and the global value is never saved.
+                _capture_auto_perspective_if_first(context)
                 try:
                     use_auto_perspective_before = context.preferences.inputs.use_auto_perspective
                 except Exception:
@@ -891,8 +1019,7 @@ class VIEW3D_OT_a2c(bpy.types.Operator):
             if prefs.pref_smooth:
                 initial_quat = space.region_3d.view_rotation
                 GL_TOKEN_LOCK.set()
-                rotation_job = thd.Thread(target=smooth_rotate, args=(space, initial_quat, final_quat))
-                rotation_job.start()
+                _start_rotation_thread(smooth_rotate, (space, initial_quat, final_quat))
             else:
                 space.region_3d.view_rotation = final_quat
 
@@ -1109,7 +1236,10 @@ def register():
     """
     Module register function called by the main package register function
     """
-    global GL_DRAW_HANDLER
+    global GL_DRAW_HANDLER, _A2C_OVERLAY_HANDLER
+
+    # Clear the stop flag in case the addon was just reloaded after being disabled
+    _A2C_STOP_EVENT.clear()
 
     # Restore object_align if the addon changed it in a previous session
     # (e.g. Blender was closed while in aligned view and the runtime state was lost)
@@ -1117,15 +1247,21 @@ def register():
 
     bpy.utils.register_class(VIEW3D_OT_a2c_snap_orbit)
     bpy.utils.register_class(VIEW3D_OT_a2c_pivot_view_drag)
+    bpy.utils.register_class(VIEW3D_OT_a2c_confirm_and_exit)
+    bpy.utils.register_class(VIEW3D_OT_a2c_reset_state)
     bpy.utils.register_class(VIEW3D_OT_a2c_leave_aligned_view)
     bpy.utils.register_class(VIEW3D_OT_a2c_roll_view)
     bpy.utils.register_class(VIEW3D_OT_a2c_pivot_view)
     bpy.utils.register_class(VIEW3D_OT_a2c)
     bpy.utils.register_class(VIEW3D_OT_a2c_align_to_edge)
 
-    # Register the viewport draw handler
+    # Register the viewport draw handler (rotation monitoring)
     GL_DRAW_HANDLER = bpy.types.SpaceView3D.draw_handler_add(
         viewport_draw_handler, (), 'WINDOW', 'POST_PIXEL'
+    )
+    # Register the aligned-view overlay text draw handler
+    _A2C_OVERLAY_HANDLER = bpy.types.SpaceView3D.draw_handler_add(
+        _overlay_draw_callback, (), 'WINDOW', 'POST_PIXEL'
     )
 
 
@@ -1133,7 +1269,15 @@ def unregister():
     """
     Module unregister function called by the main package register function
     """
-    global GL_VIEWPORT_STATE, GL_DRAW_HANDLER
+    global GL_VIEWPORT_STATE, GL_DRAW_HANDLER, _A2C_OVERLAY_HANDLER
+
+    # Signal any running smooth-rotation thread to stop, then wait long enough
+    # for it to notice the flag (one sleep step + margin).  This prevents the
+    # EXCEPTION_ACCESS_VIOLATION crash that occurs when Blender closes while a
+    # daemon rotation thread is still writing to region_3d.view_rotation.
+    _A2C_STOP_EVENT.set()
+    time.sleep(_SMOOTH_ROT_STEP * 3)
+    GL_TOKEN_LOCK.clear()
 
     # Restore object_align if we changed it and the user is still in aligned view
     for state in GL_VIEWPORT_STATE.values():
@@ -1148,15 +1292,20 @@ def unregister():
     # Clean up global state
     GL_VIEWPORT_STATE.clear()
 
-    # Remove the viewport draw handler
+    # Remove the viewport draw handlers
     if GL_DRAW_HANDLER:
         bpy.types.SpaceView3D.draw_handler_remove(GL_DRAW_HANDLER, 'WINDOW')
         GL_DRAW_HANDLER = None
+    if _A2C_OVERLAY_HANDLER:
+        bpy.types.SpaceView3D.draw_handler_remove(_A2C_OVERLAY_HANDLER, 'WINDOW')
+        _A2C_OVERLAY_HANDLER = None
 
     bpy.utils.unregister_class(VIEW3D_OT_a2c_align_to_edge)
     bpy.utils.unregister_class(VIEW3D_OT_a2c)
     bpy.utils.unregister_class(VIEW3D_OT_a2c_roll_view)
     bpy.utils.unregister_class(VIEW3D_OT_a2c_leave_aligned_view)
+    bpy.utils.unregister_class(VIEW3D_OT_a2c_reset_state)
+    bpy.utils.unregister_class(VIEW3D_OT_a2c_confirm_and_exit)
     bpy.utils.unregister_class(VIEW3D_OT_a2c_snap_orbit)
     bpy.utils.unregister_class(VIEW3D_OT_a2c_pivot_view_drag)
     bpy.utils.unregister_class(VIEW3D_OT_a2c_pivot_view)

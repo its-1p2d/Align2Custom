@@ -83,6 +83,9 @@ class A2C_Preferences(bpy.types.AddonPreferences):
         description="Which alignment mode is pre-selected when opening the pie menu",
         items=A2C_PIE_MODE_ITEMS,
         default='SELECTION',
+        update=lambda self, context: setattr(
+            context.window_manager, 'a2c_pie_mode', self.pref_default_pie_mode
+        ),
     )
 
     pref_force_ortho_in_aligned_view: bpy.props.BoolProperty(
@@ -125,69 +128,157 @@ class A2C_Preferences(bpy.types.AddonPreferences):
         default=True,
     )
 
+    # Aligned View overlay
+    pref_show_overlay: bpy.props.BoolProperty(
+        name="Show 'Aligned View' label in viewport",
+        description="Display a persistent text label in the 3D viewport while in Aligned View",
+        default=True,
+    )
+
+    pref_overlay_text_size: bpy.props.IntProperty(
+        name="Text Size",
+        description="Font size of the Aligned View overlay label",
+        default=16,
+        min=8,
+        max=48,
+    )
+
+    pref_overlay_text_color: bpy.props.FloatVectorProperty(
+        name="Text Color",
+        description="Color and opacity of the Aligned View overlay label",
+        default=(1.0, 1.0, 1.0, 0.8),
+        size=4,
+        min=0.0,
+        max=1.0,
+        subtype='COLOR',
+    )
+
+    pref_overlay_vertical_position: bpy.props.FloatProperty(
+        name="Vertical Position",
+        description="Vertical position of the label (percentage from bottom of viewport)",
+        default=90.0,
+        min=0.0,
+        max=100.0,
+        subtype='PERCENTAGE',
+    )
+
+    pref_overlay_horizontal_position: bpy.props.FloatProperty(
+        name="Horizontal Position",
+        description="Horizontal position of the label (percentage from left of viewport)",
+        default=50.0,
+        min=0.0,
+        max=100.0,
+        subtype='PERCENTAGE',
+    )
+
+    # Active preferences tab
+    pref_active_tab: bpy.props.EnumProperty(
+        name="Category",
+        items=[
+            ('GENERAL',   "General",   "General and Aligned View settings", 'SETTINGS',      0),
+            ('EDGE_MODE', "Edge Mode", "Edge alignment settings",           'MOD_EDGESPLIT', 1),
+            ('UI',        "UI",        "User interface and overlay settings",'COLLAPSEMENU',  2),
+            ('KEYMAPS',   "Keymaps",   "Keyboard shortcut settings",        'KEYINGSET',     3),
+        ],
+        default='GENERAL',
+    )
+
     def draw(self, context):
         """ Display preference options in panel """
         layout = self.layout
 
-        # General
-        box = layout.box()
-        box.label(text="General", icon='SETTINGS')
-        box.prop(self, "pref_smooth")
-        box.prop(self, "pref_minimize_roll")
+        # Category tab bar
+        row = layout.row()
+        row.prop(self, "pref_active_tab", expand=True)
 
-        # Aligned View
-        box = layout.box()
-        box.label(text="Aligned View", icon='ORIENTATION_VIEW')
-        box.prop(self, "pref_set_orientation_to_view")
-        row = box.row()
-        row.separator(factor=2.0)
-        sub = row.row()
-        sub.enabled = self.pref_set_orientation_to_view
-        sub.prop(self, "pref_set_orientation_to_view_for_custom")
-        if self.pref_set_orientation_to_view and self.pref_set_orientation_to_view_for_custom:
-            warn_row = box.row()
-            warn_row.separator(factor=2.0)
-            warn_box = warn_row.box()
-            col = warn_box.column(align=True)
-            col.alert = True
-            col.label(text="Warning: This will select the 'View' orientation,", icon='ERROR')
-            col.label(text="making Align to Custom not work until you")
-            col.label(text="reselect a Custom Orientation.")
-        box.prop(self, "pref_use_view_orientation_in_aligned_view")
-        box.prop(self, "pref_force_ortho_in_aligned_view")
 
-        # Edge
-        box = layout.box()
-        box.label(text="Edge Mode", icon='MOD_EDGESPLIT')
-        box.prop(self, "pref_force_viewpoint_edge")
-        if self.pref_force_viewpoint_edge:
-            warn_row = box.row()
-            warn_row.separator(factor=2.0)
-            warn_box = warn_row.box()
-            col = warn_box.column(align=True)
-            col.alert = True
-            col.label(text="Relies on the object's origin being correctly set.", icon='ERROR')
-            row_ignore = box.row()
-            row_ignore.separator(factor=2.0)
-            row_ignore.prop(self, "pref_ignore_depth_edge")
-        else:
-            row_ignore = box.row()
-            row_ignore.separator(factor=2.0)
-            row_ignore.enabled = False
-            row_ignore.prop(self, "pref_ignore_depth_edge")
-        box = layout.box()
-        box.label(text="UI", icon='COLLAPSEMENU')
-        row = box.row()
-        split = row.split(factor=1)
-        split.label(text="Default mode for Primary pie menu:")
-        row.prop(self, "pref_default_pie_mode", text="")
-        box.prop(self, "pref_enable_relative_position_after_align")
-        box.prop(self, "pref_offer_edge_mode_when_one_edge")
+        tab = self.pref_active_tab
 
-        # Keymaps
-        box = layout.box()
-        box.label(text="Keymaps", icon='KEYINGSET')
-        self._draw_keymap(context, box)
+        if tab == 'GENERAL':
+            # General
+            box = layout.box()
+            box.label(text="General", icon='SETTINGS')
+            box.prop(self, "pref_smooth")
+            box.prop(self, "pref_minimize_roll")
+
+            # Aligned View
+            box = layout.box()
+            box.label(text="Aligned View", icon='ORIENTATION_VIEW')
+            box.prop(self, "pref_set_orientation_to_view")
+            row = box.row()
+            row.separator(factor=2.0)
+            sub = row.row()
+            sub.enabled = self.pref_set_orientation_to_view
+            sub.prop(self, "pref_set_orientation_to_view_for_custom")
+            if self.pref_set_orientation_to_view and self.pref_set_orientation_to_view_for_custom:
+                warn_row = box.row()
+                warn_row.separator(factor=2.0)
+                warn_box = warn_row.box()
+                col = warn_box.column(align=True)
+                col.alert = True
+                col.label(text="Warning: This will select the 'View' orientation,", icon='ERROR')
+                col.label(text="making Align to Custom not work until you")
+                col.label(text="reselect a Custom Orientation.")
+            box.prop(self, "pref_use_view_orientation_in_aligned_view")
+            box.prop(self, "pref_force_ortho_in_aligned_view")
+
+        elif tab == 'EDGE_MODE':
+            # About
+            about_box = layout.box()
+            about_col = about_box.column(align=True)
+            about_col.label(text="About", icon='INFO_LARGE')
+            about_col.separator(factor=0.3)
+            about_col.label(text="Unlike Selection mode, Edge Mode aligns the view directly to a")
+            about_col.label(text="single selected edge for precise geometric control. Particularly")
+            about_col.label(text="suited for automotive and industrial design workflows where")
+            about_col.label(text="exact edge alignment is critical.")
+
+            # Settings
+            box = layout.box()
+            box.prop(self, "pref_force_viewpoint_edge")
+            if self.pref_force_viewpoint_edge:
+                warn_row = box.row()
+                warn_row.separator(factor=2.0)
+                warn_box = warn_row.box()
+                col = warn_box.column(align=True)
+                col.alert = True
+                col.label(text="Relies on the object's origin being correctly set.", icon='ERROR')
+                row_ignore = box.row()
+                row_ignore.separator(factor=2.0)
+                row_ignore.prop(self, "pref_ignore_depth_edge")
+            else:
+                row_ignore = box.row()
+                row_ignore.separator(factor=2.0)
+                row_ignore.enabled = False
+                row_ignore.prop(self, "pref_ignore_depth_edge")
+            box.prop(self, "pref_offer_edge_mode_when_one_edge")
+
+        elif tab == 'UI':
+            # Pie menu
+            box = layout.box()
+            box.label(text="Pie Menu", icon='COLLAPSEMENU')
+            row = box.row()
+            split = row.split(factor=1)
+            split.label(text="Default mode for Primary pie menu:")
+            row.prop(self, "pref_default_pie_mode", text="")
+            box.prop(self, "pref_enable_relative_position_after_align")
+
+            # Overlays
+            box = layout.box()
+            box.label(text="Overlays", icon='OVERLAY')
+            box.prop(self, "pref_show_overlay")
+            if self.pref_show_overlay:
+                sub = box.box()
+                row = sub.row()
+                row.prop(self, "pref_overlay_text_size")
+                row.prop(self, "pref_overlay_text_color")
+                row = sub.row()
+                row.prop(self, "pref_overlay_vertical_position")
+                row.prop(self, "pref_overlay_horizontal_position")
+
+        elif tab == 'KEYMAPS':
+            box = layout.box()
+            self._draw_keymap(context, box)
 
     def _draw_keymap(self, context, layout):
         wm = context.window_manager
