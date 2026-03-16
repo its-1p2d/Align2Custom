@@ -1,23 +1,16 @@
-# Align2Custom V2.5
+# Align2Custom V2.5.1
 
-Complete overhaul of Align2Custom, an add-on originally created by Francois Daubine.
-
-### Features:
-- Original features from [Align 2 Custom](https://github.com/fdaubine/Align2Custom)
-- [New] Smart align method
-- [New] Dynamic Pie Menus
-- [New] Align to selection
-- [New] Align to edge
-- [New] Navigation operators and shortcuts
-- [New] Auto-switch to View transform in Aligned View
-- and much more: [PR](https://github.com/fdaubine/Align2Custom/pull/6) 
-
+### [Check the release note for the complete list of features](https://github.com/its-1p2d/Align2Custom/releases/tag/v2.5.1)
 <br>
 
 
 ## Changelog
 
-### V2.5
+### V2.5.1
+
+Add-on preferences re-organized + new Overlays
+
+### V2.5.0
 
 Complete overhaul
 
