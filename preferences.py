@@ -121,6 +121,17 @@ class A2C_Preferences(bpy.types.AddonPreferences):
         default=False,
     )
 
+    pref_pie_style: bpy.props.EnumProperty(
+        name="Pie Menu",
+        items=[
+            ('SIMPLE',   "Simple",   "Only shows Mode box and Smart Align button. "
+                                     "Useful when you prefer to trigger specific axes from the header menu or shortcuts"),
+            ('ADVANCED', "Advanced", "Show all view axis buttons (Y, -Y, Z, -Z, X, -X) "
+                                     "together with the Mode selector and Smart Align"),
+        ],
+        default='SIMPLE',
+    )
+
     pref_offer_edge_mode_when_one_edge: bpy.props.BoolProperty(
         name="Suggest Edge Align when one edge selected in Selection mode",
         description="In Edit Mode with exactly one edge selected, if you trigger an align operator "
@@ -257,10 +268,12 @@ class A2C_Preferences(bpy.types.AddonPreferences):
             # Pie menu
             box = layout.box()
             box.label(text="Pie Menu", icon='COLLAPSEMENU')
-            row = box.row()
-            split = row.split(factor=1)
-            split.label(text="Default mode for Primary pie menu:")
-            row.prop(self, "pref_default_pie_mode", text="")
+            split = box.split(factor=0.3, align=True)
+            split.label(text="Pie Menu:")
+            split.row(align=True).prop(self, "pref_pie_style", expand=True)
+            split = box.split(factor=0.3, align=True)
+            split.label(text="Default mode:")
+            split.prop(self, "pref_default_pie_mode", text="")
             box.prop(self, "pref_enable_relative_position_after_align")
 
             # Overlays
@@ -298,7 +311,6 @@ class A2C_Preferences(bpy.types.AddonPreferences):
         keymap_items = (
             ('view3d.a2c_leave_aligned_view', None),
             ('view3d.a2c_pivot_view_drag', None),
-            ('view3d.a2c_snap_orbit', None),
         )
         if kc_addon:
             for item in keymap_items:

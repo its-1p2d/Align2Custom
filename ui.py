@@ -32,7 +32,8 @@ import math
 import bpy
 
 from . import ops as align2custom
-from .ops import A2C_VIEWPOINT_ITEMS, A2C_PIE_MODE_ITEMS, is_viewport_drifted, should_offer_switch_to_edge
+from .ops import (A2C_VIEWPOINT_ITEMS, A2C_PIE_MODE_ITEMS,
+                  get_prefs, is_viewport_drifted, should_offer_switch_to_edge)
 
 
 # ## Global data ###############################################################
@@ -53,7 +54,18 @@ KEYMAP_INFO = {
 
 
 def _invoke_align_to_edge(context, viewpoint):
-    """Run view3d.a2c_align_to_edge with optional area override so it runs in the 3D view."""
+    """Run view3d.a2c_align_to_edge with optional area override so it runs in the 3D view.
+
+    Defensive: returns {'CANCELLED'} (without raising) when the operator's poll
+    would fail — e.g. not in Edit Mesh, or the user has zero / multiple edges
+    selected instead of exactly one. This avoids the RuntimeError that bubbles
+    out of bpy.ops.* when poll() is False.
+    """
+    if context.mode != 'EDIT_MESH':
+        return {'CANCELLED'}
+    obj = context.edit_object
+    if not obj or obj.type != 'MESH' or obj.data.total_edge_sel != 1:
+        return {'CANCELLED'}
     if context.area and context.area.type == 'VIEW_3D':
         with context.temp_override(area=context.area):
             return bpy.ops.view3d.a2c_align_to_edge(prop_viewpoint=viewpoint)
@@ -77,21 +89,24 @@ class VIEW3D_OT_a2c_pie_viewpoint(bpy.types.Operator):
     def execute(self, context):
         mode = context.window_manager.a2c_pie_mode
         if mode == 'SELECTION':
-            try:
-                prefs = context.preferences.addons[__package__].preferences
-                if (getattr(prefs, "pref_offer_edge_mode_when_one_edge", True) and
-                        should_offer_switch_to_edge(context, mode)):
+            prefs = get_prefs(context)
+            if (prefs is not None
+                    and getattr(prefs, "pref_offer_edge_mode_when_one_edge", True)
+                    and should_offer_switch_to_edge(context, mode)):
+                try:
                     wm = context.window_manager
                     wm.a2c_pending_edge_viewpoint = self.prop_viewpoint
                     bpy.ops.wm.call_menu(name='VIEW3D_MT_a2c_confirm_one_edge')
                     return {'FINISHED'}
-            except Exception:
-                pass
+                except Exception:
+                    pass
         if mode == 'EDGE':
             # Ensure the edge operator runs in the 3D view (e.g. when invoked from pie menu)
             result = _invoke_align_to_edge(context, self.prop_viewpoint)
             if result == {'FINISHED'}:
                 self.report({'INFO'}, "Aligned View: Enabled (Edge)")
+            elif result == {'CANCELLED'}:
+                self.report({'WARNING'}, "Edge Align requires exactly one edge selected in Edit Mode")
             return result
         result = bpy.ops.view3d.a2c(prop_align_mode=mode, prop_viewpoint=self.prop_viewpoint)
         if result == {'FINISHED'}:
@@ -114,20 +129,23 @@ Alt+Click: Reset Auto Perspective and Align to World (last-resort recovery)"""
     def execute(self, context):
         mode = context.window_manager.a2c_pie_mode
         if mode == 'SELECTION':
-            try:
-                prefs = context.preferences.addons[__package__].preferences
-                if (getattr(prefs, "pref_offer_edge_mode_when_one_edge", True) and
-                        should_offer_switch_to_edge(context, mode)):
+            prefs = get_prefs(context)
+            if (prefs is not None
+                    and getattr(prefs, "pref_offer_edge_mode_when_one_edge", True)
+                    and should_offer_switch_to_edge(context, mode)):
+                try:
                     wm = context.window_manager
                     wm.a2c_pending_edge_viewpoint = 'NEAREST'
                     bpy.ops.wm.call_menu(name='VIEW3D_MT_a2c_confirm_one_edge')
                     return {'FINISHED'}
-            except Exception:
-                pass
+                except Exception:
+                    pass
         if mode == 'EDGE':
             result = _invoke_align_to_edge(context, 'NEAREST')
             if result == {'FINISHED'}:
                 self.report({'INFO'}, "Aligned View: Enabled (Edge)")
+            elif result == {'CANCELLED'}:
+                self.report({'WARNING'}, "Edge Align requires exactly one edge selected in Edit Mode")
             return result
         result = bpy.ops.view3d.a2c(prop_align_mode=mode, prop_viewpoint='NEAREST')
         if result == {'FINISHED'}:
@@ -156,6 +174,8 @@ class VIEW3D_OT_a2c_confirm_switch_to_edge(bpy.types.Operator):
         result = _invoke_align_to_edge(context, viewpoint)
         if result == {'FINISHED'}:
             self.report({'INFO'}, "Aligned View: Enabled (Edge)")
+        elif result == {'CANCELLED'}:
+            self.report({'WARNING'}, "Edge Align requires exactly one edge selected in Edit Mode")
         return result
 
 
@@ -211,18 +231,57 @@ Alt+Click: Confirm current angle and exit — the view stays here and becomes th
         return bpy.ops.view3d.a2c_leave_aligned_view('EXEC_DEFAULT')
 
 
+class VIEW3D_OT_a2c_roll_minus90_pie(bpy.types.Operator):
+    """Roll view -90°.
+Alt+Click: Snap to nearest canonical aligned viewpoint"""
+    bl_idname = "view3d.a2c_roll_minus90_pie"
+    bl_label = "Roll -90°"
+    bl_options = {'REGISTER'}
+
+    from_canonical: bpy.props.BoolProperty(default=False, options={'HIDDEN'})
+
+    def invoke(self, context, event):
+        if event.alt:
+            return bpy.ops.view3d.a2c_snap_orbit('EXEC_DEFAULT')
+        return bpy.ops.view3d.a2c_roll_view(
+            'EXEC_DEFAULT',
+            angle=math.radians(-90),
+            from_canonical=self.from_canonical,
+        )
+
+
 # ## Pie menu ##################################################################
 
 class VIEW3D_MT_a2c_pie(bpy.types.Menu):
     bl_idname = "VIEW3D_MT_a2c_pie"
     bl_label = "Align 2 Custom"
 
+    @staticmethod
+    def _draw_mode_selector(parent, wm, in_edit_mesh):
+        """Render the 4-button mode selector. Greys out EDGE when not in Edit Mesh."""
+        box = parent.box()
+        row = box.row(align=True)
+        row.scale_x = 1.2
+        row.scale_y = 1.2
+        for identifier, _name, _desc, icon, _value in A2C_PIE_MODE_ITEMS:
+            sub = row.row(align=True)
+            if identifier == 'EDGE' and not in_edit_mesh:
+                sub.enabled = False
+            sub.prop_enum(wm, "a2c_pie_mode", identifier, text="", icon=icon)
+        return box
+
     def draw(self, context):
         layout = self.layout
         pie = layout.menu_pie()
 
         wm = context.window_manager
-        prefs = context.preferences.addons[__package__].preferences
+        prefs = get_prefs(context)
+        if prefs is None:
+            return
+        # Auto-switch out of EDGE when not in Edit Mesh so operators don't fail poll()
+        in_edit_mesh = context.mode == 'EDIT_MESH'
+        if wm.a2c_pie_mode == 'EDGE' and not in_edit_mesh:
+            wm.a2c_pie_mode = 'SELECTION'
         is_aligned = align2custom.is_viewport_aligned(context)
         use_relative = prefs.pref_enable_relative_position_after_align and is_aligned
         is_drifted = is_viewport_drifted(context) if is_aligned else False
@@ -249,9 +308,8 @@ class VIEW3D_MT_a2c_pie(bpy.types.Menu):
             op = pie.operator("view3d.a2c_pivot_view", icon='TRIA_UP', text=suffix)
             op.direction = 'TOP'
             op.from_canonical = is_drifted
-            # 5
-            op = pie.operator("view3d.a2c_roll_view", icon='LOOP_BACK', text="Roll -90°" + suffix)
-            op.angle = math.radians(-90)
+            # 5 – NW: Roll -90° (Alt+Click: snap to nearest canonical viewpoint)
+            op = pie.operator("view3d.a2c_roll_minus90_pie", icon='LOOP_BACK', text="Roll -90°" + suffix)
             op.from_canonical = is_drifted
             # 6
             op = pie.operator("view3d.a2c_roll_view", icon='LOOP_FORWARDS', text="Roll +90°" + suffix)
@@ -263,6 +321,18 @@ class VIEW3D_MT_a2c_pie(bpy.types.Menu):
             op = pie.operator("view3d.a2c_roll_view", icon='DECORATE_OVERRIDE', text="Roll +180°" + suffix)
             op.angle = math.radians(180)
             op.from_canonical = is_drifted
+
+        elif prefs.pref_pie_style == 'SIMPLE':
+            # Minimalist layout: mode selector (West) + Smart (East) only
+            # In EDGE mode, Smart is only enabled when exactly one edge is selected
+            edge_ok = align2custom.has_single_edge_selected(context)
+            viewpoint_enabled = (wm.a2c_pie_mode != 'EDGE') or edge_ok
+            # 1 – West: mode selector box
+            self._draw_mode_selector(pie, wm, in_edit_mesh)
+            # 2 – East: Smart (Nearest)
+            col = pie.column()
+            col.enabled = viewpoint_enabled
+            col.operator("view3d.a2c_pie_viewpoint_nearest", icon='SHADERFX', text="Smart Align")
 
         else:
             # Standard layout: alignment viewpoints
@@ -281,13 +351,9 @@ class VIEW3D_MT_a2c_pie(bpy.types.Menu):
             # 3 – South: Smart (Nearest)
             col = pie.column()
             col.enabled = viewpoint_enabled
-            col.operator("view3d.a2c_pie_viewpoint_nearest", icon='SHADERFX', text="Smart")
+            col.operator("view3d.a2c_pie_viewpoint_nearest", icon='SHADERFX', text="Smart Align")
             # 4 – North: mode selector (Custom, Cursor, Selection, Edge)
-            box = pie.box()
-            row = box.row(align=True)
-            row.scale_x = 1.2
-            row.scale_y = 1.2
-            row.prop(wm, "a2c_pie_mode", expand=True, icon_only=True)
+            self._draw_mode_selector(pie, wm, in_edit_mesh)
             # 5 – NW: Z / Top
             col = pie.column()
             col.enabled = viewpoint_enabled
@@ -339,7 +405,7 @@ class VIEW3D_MT_a2c(bpy.types.Menu):
             ("Back",    'BACK',    False, None),
             ("Right",   'RIGHT',   True,  None),
             ("Left",    'LEFT',    False, None),
-            ("Smart",   'NEAREST', True,  'SHADERFX'),
+            ("Smart Align",   'NEAREST', True,  'SHADERFX'),
         )
         for label, viewpoint, sep, icon in entries:
             if sep:
@@ -420,6 +486,7 @@ _classes = (
     VIEW3D_OT_a2c_run_selection_align,
     VIEW3D_MT_a2c_confirm_one_edge,
     VIEW3D_OT_a2c_exit_pie,
+    VIEW3D_OT_a2c_roll_minus90_pie,
     VIEW3D_MT_a2c_pie,
     VIEW3D_MT_a2c,
     VIEW3D_MT_align2custom,
@@ -447,8 +514,9 @@ def register():
 
     # Apply default pie mode from preferences
     try:
-        prefs = bpy.context.preferences.addons[__package__].preferences
-        bpy.context.window_manager.a2c_pie_mode = prefs.pref_default_pie_mode
+        prefs = get_prefs(bpy.context)
+        if prefs is not None:
+            bpy.context.window_manager.a2c_pie_mode = prefs.pref_default_pie_mode
     except Exception:
         pass
 

@@ -39,22 +39,6 @@ from . import ui
 _addon_keymaps = []
 
 
-bl_info = {
-    "name": "Align 3D View to selection, custom orientation or cursor",
-    "description": "Set of commands to align the 3D view to the axes of "
-                   "the active custom transform orientation or the 3D cursor.",
-    "author": "Francois Daubine, 1P2D",
-    "version": (2, 5, 1),
-    "blender": (4, 2, 0),
-    "location": "View3D > View > Align View",
-    "warning": "",
-    "doc_url": "https://www.github.com/fdaubine/Align2Custom",
-    "tracker_url": "https://www.github.com/fdaubine/Align2Custom",
-    "support": "COMMUNITY",
-    "category": "3D View",
-}
-
-
 # ## Blender registration section #############################################
 def register():
     """ Main register function """
@@ -76,10 +60,6 @@ def register():
         )
         _addon_keymaps.append((km, kmi))
         kmi = km.keymap_items.new(
-            "view3d.a2c_snap_orbit", 'LEFT_ALT', 'PRESS'
-        )
-        _addon_keymaps.append((km, kmi))
-        kmi = km.keymap_items.new(
             "view3d.view_roll", 'WHEELUPMOUSE', 'PRESS', shift=True, alt=True
         )
         kmi.properties.angle = 0.1
@@ -94,7 +74,10 @@ def register():
 def unregister():
     """ Main unregister function """
     for km, kmi in _addon_keymaps:
-        km.keymap_items.remove(kmi)
+        try:
+            km.keymap_items.remove(kmi)
+        except Exception:
+            pass
     _addon_keymaps.clear()
 
     ui.unregister()
