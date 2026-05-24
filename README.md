@@ -6,6 +6,11 @@
 
 ## Changelog
 
+### V2.5.2
+
+- Bug fixes
+- New "Minimalist" Pie Menu (skipping axis selection entirely, only displaying Mode box and Smart Align button)
+
 ### V2.5.1
 
 Add-on preferences re-organized + new Overlays
