@@ -1,6 +1,6 @@
 # Align2Custom V2.5.2
 
-### [Check the release note for the complete list of features](https://github.com/its-1p2d/Align2Custom/releases/tag/v2.5.1)
+### [Check the release note for the complete list of features](https://github.com/its-1p2d/Align2Custom/releases/tag/v2.5.2)
 <br>
 
 
